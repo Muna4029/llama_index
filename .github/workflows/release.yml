@@ -21,18 +21,12 @@ jobs:
       version: ${{ steps.build-publish-core.outputs.version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install uv and set python version
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.10"
-
-      - name: Pre-release sanity check
-        shell: bash
-        working-directory: llama-dev
-        run: |
-          uv run -- llama-dev --repo-root .. release check --before-core
+          python-version: "3.11"
 
       - name: Install core dependencies
         working-directory: llama-index-core
@@ -47,7 +41,7 @@ jobs:
           uv run python -c "from llama_index.core.utils import get_tokenizer; print(get_tokenizer('gpt-5-mini'))"
 
       - name: Generate build provenance attestations
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         id: attest
         with:
           subject-path: "llama-index-core/llama_index/core/_static/**/*"
@@ -74,6 +68,26 @@ jobs:
             sleep 10
           done
 
+  notify-workflows-py:
+    name: Trigger llama-index-core bump in workflows-py
+    runs-on: ubuntu-latest
+    needs: publish-core
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CI_BOT_APP_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+          owner: run-llama
+
+      - name: Trigger repository_dispatch
+        uses: peter-evans/repository-dispatch@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: run-llama/workflows-py
+          event-type: llama-index-core-release
+
   build-n-publish:
     name: Build and publish 'llama-index' to PyPI
     runs-on: ubuntu-latest
@@ -81,12 +95,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install uv and set python version
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.9"
+          python-version: "3.11"
 
       - name: Get version
         id: get_version
@@ -114,38 +128,10 @@ jobs:
           working-directory: "."
 
       - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.get_version.outputs.version }}
-          release_name: v${{ steps.get_version.outputs.version }}
-          body_path: "RELEASE.md"
-          draft: false
-          prerelease: false
-
-      - name: Get Asset name
         run: |
-          export PKG=$(ls dist/ | grep tar)
-          set -- $PKG
-          echo "name=$1" >> $GITHUB_ENV
-
-      - name: Upload Release Asset (sdist) to GitHub
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/${{ env.name }}
-          asset_name: ${{ env.name }}
-          asset_content_type: application/zip
-
-      - name: Tag the released commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          TAG_NAME="v${{ steps.get_version.outputs.version }}"
-          git tag "${TAG_NAME}" -m "${TAG_NAME}"
-          git push origin --tags
+          gh release create "v${{ steps.get_version.outputs.version }}" \
+            --title "v${{ steps.get_version.outputs.version }}" \
+            --notes-file RELEASE.md \
+            dist/*.tar.gz
